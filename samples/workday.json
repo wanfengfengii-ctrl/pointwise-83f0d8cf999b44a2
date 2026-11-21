@@ -1,0 +1,21 @@
+{
+  "batch_size": 12,
+  "A": {
+    "work_order": "北桥-夜班-A-01",
+    "entries": {"in": "复验台"},
+    "exits": ["to-b"],
+    "transitions": {"复验台": [["exit", "to-b", 1, 1, 1]]}
+  },
+  "B": {
+    "work_order": "北桥-夜班-B-01",
+    "entries": {"in": "复核台"},
+    "exits": ["pass", "fail"],
+    "transitions": {"复核台": [["exit", "pass", 1, 1, 2], ["exit", "fail", 1, 1, 2]]}
+  },
+  "B_correction": {
+    "work_order": "北桥-白班-B-02",
+    "entries": {"in": "复核台"},
+    "exits": ["pass", "fail"],
+    "transitions": {"复核台": [["exit", "pass", 1, 1, 1]]}
+  }
+}
