@@ -5,6 +5,16 @@ from source.ports import validate_ports
 from source.routes import RouteDraft, Transition
 
 
+def validate_scan_labels(scan_labels: Mapping[str, str], states: set[str]) -> None:
+    if not isinstance(scan_labels, Mapping):
+        raise ValueError('scan labels must be a mapping')
+    for state, label in scan_labels.items():
+        if not isinstance(state, str) or state not in states:
+            raise ValueError(f'scan label for {state!r} refers to an unknown state')
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f'scan label for {state!r} must be a non-blank string')
+
+
 def validate_route(station: str, draft: RouteDraft) -> None:
     if not isinstance(station, str) or not station.strip():
         raise ValueError('station is required')
@@ -20,6 +30,7 @@ def validate_route(station: str, draft: RouteDraft) -> None:
 
     states = set(draft.transitions)
     validate_ports(draft.ports, states)
+    validate_scan_labels(draft.scan_labels, states)
     destinations = {'state': states, 'exit': set(draft.ports.exits)}
     for state, edges in draft.transitions.items():
         if not isinstance(edges, Sequence) or not edges:

@@ -21,6 +21,7 @@ def _encode_route(draft: RouteDraft) -> str:
         'exits': draft.ports.exits,
         'work_order': draft.work_order,
         'transitions': transitions,
+        'scan_labels': dict(draft.scan_labels),
     }, sort_keys=True)
 
 
@@ -34,7 +35,10 @@ def _decode_route(payload: str) -> RouteDraft:
         )
         for state, edges in data['transitions'].items()
     }
-    return RouteDraft(ports, MappingProxyType(transitions), data['work_order'])
+    scan_labels = MappingProxyType(dict(data.get('scan_labels', {})))
+    return RouteDraft(
+        ports, MappingProxyType(transitions), data['work_order'], scan_labels
+    )
 
 
 class RevisionStore:

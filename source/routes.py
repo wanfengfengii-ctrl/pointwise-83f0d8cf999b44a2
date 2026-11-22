@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Literal
 
@@ -19,6 +19,7 @@ class RouteDraft:
     ports: PortDirectory
     transitions: Mapping[str, Sequence[Transition]]
     work_order: str
+    scan_labels: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

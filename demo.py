@@ -5,9 +5,15 @@ from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from analysis.requests import ReportRequest, sign_report
+from analysis.requests import (
+    ReportRequest,
+    ScanReportRequest,
+    sign_report,
+    sign_scan_report,
+)
 from archive.report_store import ReportStore
-from archive.retrieve import get_report
+from archive.retrieve import get_report, get_scan_report
+from archive.scan_report_store import ScanReportStore
 from dispatch.plan_store import PlanStore
 from dispatch.plans import save_plan
 from dispatch.port_bindings import ExitBinding, ReceivedPort, Transfer
@@ -37,6 +43,100 @@ def _issue(store: RevisionStore, station: str, draft: RouteDraft):
     revision = save_revision(store, station, draft)
     piece = issue_piece(store, station, revision)
     return encode_piece(piece), piece.identity
+
+
+def _scan_draft() -> RouteDraft:
+    # Half the coupons reach the marked hold state at hour 0 and stay there;
+    # the other half reach the bench and leave through "pass" at hour 1.
+    return RouteDraft(
+        PortDirectory({'in': 'split'}, ('pass',)),
+        {
+            'split': (
+                Transition('state', 'hold', 0, Fraction(1, 2)),
+                Transition('state', 'bench', 0, Fraction(1, 2)),
+            ),
+            'hold': (Transition('state', 'hold', 0, Fraction(1)),),
+            'bench': (Transition('exit', 'pass', 1, Fraction(1)),),
+        },
+        '北桥-首扫-01',
+        {'hold': 'R'},
+    )
+
+
+def run_scan_demo(directory: Path) -> list[dict]:
+    station_path = directory / 'scan_stations.sqlite'
+    center_path = directory / 'scan_center.sqlite'
+    with closing(sqlite3.connect(station_path)) as station_db:
+        revisions = RevisionStore(station_db)
+        revisions.initialize()
+        revision_id = save_revision(revisions, 'A', _scan_draft())
+        piece = issue_piece(revisions, 'A', revision_id, version=2)
+        payload, identity = encode_piece(piece), piece.identity
+
+    with closing(sqlite3.connect(center_path)) as center_db:
+        pieces = PieceStore(center_db)
+        plans = PlanStore(center_db)
+        scan_reports = ScanReportStore(center_db)
+        for store in (pieces, plans, scan_reports):
+            store.initialize()
+        received = receive_piece(pieces, payload, identity)
+        received_id = received.received_id
+        start = ReceivedPort(received_id, 'in')
+        plan = save_plan(plans, pieces, (received_id,), (
+            ExitBinding(ReceivedPort(received_id, 'pass'), Terminal.RELEASE),
+        ))
+        request = ScanReportRequest(
+            plan.plan_id, start, 1, received_id, 'R', 0,
+        )
+        signed = sign_scan_report(scan_reports, plans, pieces, request)
+        report = signed.report
+        assert (report.support, report.joint, report.conditional) == (
+            Fraction(1, 2), Fraction(0), Fraction(0),
+        )
+        assert report.sources[0].received_id == received_id
+        assert report.sources[0].issued_id == identity
+
+    # The night shift closes the station; the day shift reopens the center and
+    # retrieves the finalized report and its first receipt by the original id.
+    with closing(sqlite3.connect(center_path)) as reopened:
+        scan_reports = ScanReportStore(reopened)
+        scan_reports.initialize()
+        handed_over = get_scan_report(scan_reports, report.report_id)
+        assert handed_over == signed
+        assert handed_over.first_receipt == signed.first_receipt
+
+    return [
+        {
+            'case_id': 'scan-v2',
+            'input': {
+                'plan_id': plan.plan_id,
+                'start': [received_id, 'in'],
+                'deadline': request.deadline,
+                'scan_received_id': request.scan_received_id,
+                'scan_label': request.scan_label,
+                'scan_hour': request.scan_hour,
+            },
+            'expected': ['1/2', '0', '0'],
+            'actual': [str(report.support), str(report.joint), str(report.conditional)],
+            'downstream_expected': {
+                'report_id': report.report_id,
+                'receipt_linked': True,
+                'received_ids': [received_id],
+            },
+            'downstream_actual': {
+                'report_id': handed_over.report.report_id,
+                'receipt_linked': handed_over.first_receipt.report_id
+                == handed_over.report.report_id,
+                'received_ids': [item.received_id for item in handed_over.report.sources],
+            },
+            'code_paths': [
+                'exchange/scan_evidence.py', 'exchange/wire.py', 'exchange/receive.py',
+                'analysis/scan_probabilities.py', 'analysis/requests.py',
+                'archive/scan_report_store.py', 'archive/retrieve.py',
+            ],
+            'oracle': '半数试片第0小时首扫R后永久滞留，支持1/2、准时放行0，条件率0；重开中心按原号取回定稿及首执。',
+        },
+    ]
 
 
 def run_demo(directory: Path) -> list[dict]:
@@ -119,7 +219,8 @@ def run_demo(directory: Path) -> list[dict]:
 
 def main() -> None:
     with TemporaryDirectory(prefix='northbridge-workday-') as directory:
-        for case in run_demo(Path(directory)):
+        base = Path(directory)
+        for case in run_demo(base) + run_scan_demo(base):
             print('POINTWISE_SCENARIO ' + json.dumps(case, ensure_ascii=False, sort_keys=True))
 
 
